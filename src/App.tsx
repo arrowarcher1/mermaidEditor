@@ -35,12 +35,14 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Share2,
   Sparkles,
   Sun,
   Trash2,
   Upload,
   Workflow,
   ZoomIn,
+  ZoomOut,
 } from "lucide-react"
 import { toast, Toaster } from "sonner"
 
@@ -50,6 +52,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -107,6 +110,9 @@ import {
 import "./App.css"
 
 const STORAGE_KEY = "mermaid-studio:v1"
+const SHARE_PARAM = "diagram"
+const PREVIEW_PARAM = "preview"
+const SHARE_PAYLOAD_VERSION = 1
 const SAVE_DELAY_MS = 250
 const RENDER_DELAY_MS = 260
 const MIN_ZOOM = 40
@@ -131,6 +137,24 @@ type PersistedState = {
   interfaceTheme: InterfaceTheme
   diagramTheme: string
   autoRender: boolean
+}
+
+type SharePayload = {
+  v: typeof SHARE_PAYLOAD_VERSION
+  title: string
+  source: string
+  diagramTheme: string
+}
+
+type SharedDiagram = {
+  title: string
+  source: string
+  diagramTheme: string
+  previewOnly: boolean
+}
+
+type InitialAppState = PersistedState & {
+  previewOnly: boolean
 }
 
 const lightThemes = previewThemes.filter((theme) => !theme.dark)
@@ -254,6 +278,136 @@ function loadPersistedState(): PersistedState {
   }
 }
 
+function encodeBase64Url(value: string) {
+  const bytes = new TextEncoder().encode(value)
+  let binary = ""
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "")
+}
+
+function decodeBase64Url(value: string) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/")
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=")
+  const binary = atob(padded)
+  const bytes = Uint8Array.from(binary, (character) =>
+    character.charCodeAt(0)
+  )
+  return new TextDecoder().decode(bytes)
+}
+
+function getLocationShareParams() {
+  if (typeof window === "undefined") {
+    return null
+  }
+
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""))
+  const searchParams = new URLSearchParams(window.location.search)
+  const encoded = hashParams.get(SHARE_PARAM) ?? searchParams.get(SHARE_PARAM)
+
+  if (!encoded) {
+    return null
+  }
+
+  return {
+    encoded,
+    previewOnly:
+      hashParams.get(PREVIEW_PARAM) === "1" ||
+      searchParams.get(PREVIEW_PARAM) === "1",
+  }
+}
+
+function loadSharedDiagram(): SharedDiagram | null {
+  const params = getLocationShareParams()
+
+  if (!params) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(decodeBase64Url(params.encoded)) as Partial<
+      SharePayload
+    >
+
+    if (
+      parsed.v !== SHARE_PAYLOAD_VERSION ||
+      typeof parsed.source !== "string"
+    ) {
+      return null
+    }
+
+    return {
+      title: normalizeDocumentTitle(
+        typeof parsed.title === "string" ? parsed.title : "Shared diagram"
+      ),
+      source: parsed.source,
+      diagramTheme: isPreviewTheme(parsed.diagramTheme)
+        ? parsed.diagramTheme
+        : defaultLightTheme,
+      previewOnly: params.previewOnly,
+    }
+  } catch {
+    return null
+  }
+}
+
+function createSharePayload(
+  title: string,
+  source: string,
+  diagramTheme: string
+): SharePayload {
+  return {
+    v: SHARE_PAYLOAD_VERSION,
+    title: normalizeDocumentTitle(title),
+    source,
+    diagramTheme: isPreviewTheme(diagramTheme) ? diagramTheme : defaultLightTheme,
+  }
+}
+
+function createShareUrl(payload: SharePayload, previewOnly: boolean) {
+  const url = new URL(window.location.href)
+  const params = new URLSearchParams()
+
+  if (previewOnly) {
+    params.set(PREVIEW_PARAM, "1")
+  }
+
+  params.set(SHARE_PARAM, encodeBase64Url(JSON.stringify(payload)))
+  url.search = ""
+  url.hash = params.toString()
+  return url.toString()
+}
+
+function loadInitialAppState(): InitialAppState {
+  const sharedDiagram = loadSharedDiagram()
+
+  if (sharedDiagram) {
+    const document = createDiagramDocument(
+      sharedDiagram.title,
+      sharedDiagram.source
+    )
+    const previewTheme = getPreviewTheme(sharedDiagram.diagramTheme)
+
+    return {
+      documents: [document],
+      activeDocumentId: document.id,
+      interfaceTheme: previewTheme.dark ? "dark" : "light",
+      diagramTheme: sharedDiagram.diagramTheme,
+      autoRender: true,
+      previewOnly: sharedDiagram.previewOnly,
+    }
+  }
+
+  return {
+    ...loadPersistedState(),
+    previewOnly: false,
+  }
+}
+
 function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement("a")
@@ -296,10 +450,10 @@ function extractSvgDimensions(svg: string) {
 }
 
 function App() {
-  const persisted = useMemo(loadPersistedState, [])
-  const [documents, setDocuments] = useState(persisted.documents)
+  const initialState = useMemo(loadInitialAppState, [])
+  const [documents, setDocuments] = useState(initialState.documents)
   const [activeDocumentId, setActiveDocumentId] = useState(
-    persisted.activeDocumentId
+    initialState.activeDocumentId
   )
   const activeDocument =
     documents.find((document) => document.id === activeDocumentId) ??
@@ -307,12 +461,17 @@ function App() {
   const source = activeDocument?.source ?? ""
   const [renderSource, setRenderSource] = useState(source)
   const [interfaceTheme, setInterfaceTheme] = useState<InterfaceTheme>(
-    persisted.interfaceTheme
+    initialState.interfaceTheme
   )
   const [diagramTheme, setDiagramTheme] = useState<string>(
-    persisted.diagramTheme
+    initialState.diagramTheme
   )
-  const [autoRender, setAutoRender] = useState(persisted.autoRender)
+  const [autoRender, setAutoRender] = useState(initialState.autoRender)
+  const [isPreviewOnly, setIsPreviewOnly] = useState(initialState.previewOnly)
+  const [shareFallback, setShareFallback] = useState<{
+    title: string
+    url: string
+  } | null>(null)
   const [query, setQuery] = useState("")
   const [selectedType, setSelectedType] = useState("All")
   const [activeTab, setActiveTab] = useState("files")
@@ -376,6 +535,44 @@ function App() {
   }, [isDarkInterface])
 
   useEffect(() => {
+    function loadSharedHash() {
+      const sharedDiagram = loadSharedDiagram()
+
+      if (!sharedDiagram) {
+        return
+      }
+
+      const document = createDiagramDocument(
+        sharedDiagram.title,
+        sharedDiagram.source
+      )
+      const sharedTheme = getPreviewTheme(sharedDiagram.diagramTheme)
+
+      setDocuments([document])
+      setActiveDocumentId(document.id)
+      setRenderSource(document.source)
+      setInterfaceTheme(sharedTheme.dark ? "dark" : "light")
+      setDiagramTheme(sharedDiagram.diagramTheme)
+      setAutoRender(true)
+      setIsPreviewOnly(sharedDiagram.previewOnly)
+      setZoom([100])
+      setPan({ x: 0, y: 0 })
+    }
+
+    window.addEventListener("hashchange", loadSharedHash)
+    window.addEventListener("popstate", loadSharedHash)
+
+    return () => {
+      window.removeEventListener("hashchange", loadSharedHash)
+      window.removeEventListener("popstate", loadSharedHash)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isPreviewOnly) {
+      return
+    }
+
     const timeout = window.setTimeout(() => {
       window.localStorage.setItem(
         STORAGE_KEY,
@@ -390,7 +587,14 @@ function App() {
     }, SAVE_DELAY_MS)
 
     return () => window.clearTimeout(timeout)
-  }, [activeDocumentId, autoRender, diagramTheme, documents, interfaceTheme])
+  }, [
+    activeDocumentId,
+    autoRender,
+    diagramTheme,
+    documents,
+    interfaceTheme,
+    isPreviewOnly,
+  ])
 
   useEffect(() => {
     if (!autoRender) {
@@ -639,6 +843,38 @@ function App() {
     toast.success(successMessage)
   }
 
+  function getCurrentSharePayload() {
+    return createSharePayload(
+      activeDocument?.title || "Untitled diagram",
+      source,
+      diagramTheme
+    )
+  }
+
+  async function copyShareLink(previewOnly: boolean) {
+    const url = createShareUrl(getCurrentSharePayload(), previewOnly)
+    const title = previewOnly ? "Preview link" : "Editor link"
+
+    try {
+      await navigator.clipboard.writeText(url)
+      toast.success(`${title} copied`)
+    } catch {
+      setShareFallback({ title, url })
+      toast.message("Copy blocked by the browser")
+    }
+  }
+
+  function openEditorFromPreview() {
+    window.history.replaceState(
+      null,
+      "",
+      createShareUrl(getCurrentSharePayload(), false)
+    )
+    setIsPreviewOnly(false)
+    setExamplesCollapsed(true)
+    setSourceCollapsed(false)
+  }
+
   async function exportPng() {
     if (!svg) {
       toast.error("Render a valid diagram before exporting PNG")
@@ -721,6 +957,138 @@ function App() {
         Rendering
       </Badge>
     )
+
+  const shareFallbackDialog = (
+    <Dialog
+      open={shareFallback !== null}
+      onOpenChange={(open) => {
+        if (!open) {
+          setShareFallback(null)
+        }
+      }}
+    >
+      <DialogContent className="share-dialog">
+        <DialogHeader>
+          <DialogTitle>{shareFallback?.title || "Share link"}</DialogTitle>
+          <DialogDescription>
+            Copy this link manually if browser clipboard access is unavailable.
+          </DialogDescription>
+        </DialogHeader>
+        <Input
+          aria-label="Share link"
+          readOnly
+          value={shareFallback?.url ?? ""}
+          onFocus={(event) => event.currentTarget.select()}
+          onClick={(event) => event.currentTarget.select()}
+        />
+        <DialogFooter showCloseButton />
+      </DialogContent>
+    </Dialog>
+  )
+
+  if (isPreviewOnly) {
+    return (
+      <TooltipProvider>
+        <div className="shared-preview-shell">
+          <header className="shared-preview-topbar">
+            <div className="brand-block">
+              <div className="brand-mark">
+                <Workflow aria-hidden="true" />
+              </div>
+              <div>
+                <h1>{normalizeDocumentTitle(activeDocument?.title || "")}</h1>
+                <p>Mermaid Studio preview</p>
+              </div>
+            </div>
+
+            <div className="shared-preview-actions">
+              {statusBadge}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      aria-label="Zoom out"
+                      onClick={() =>
+                        setZoom(([value]) => [
+                          Math.max(MIN_ZOOM, value - 15),
+                        ])
+                      }
+                    />
+                  }
+                >
+                  <ZoomOut />
+                </TooltipTrigger>
+                <TooltipContent>Zoom out</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      aria-label="Reset view"
+                      onClick={resetView}
+                    />
+                  }
+                >
+                  <Focus />
+                </TooltipTrigger>
+                <TooltipContent>Reset view</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      aria-label="Zoom in"
+                      onClick={() =>
+                        setZoom(([value]) => [
+                          Math.min(MAX_ZOOM, value + 15),
+                        ])
+                      }
+                    />
+                  }
+                >
+                  <ZoomIn />
+                </TooltipTrigger>
+                <TooltipContent>Zoom in</TooltipContent>
+              </Tooltip>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void copyShareLink(true)}
+              >
+                <Share2 data-icon="inline-start" />
+                Share
+              </Button>
+              <Button size="sm" onClick={openEditorFromPreview}>
+                <FileCode2 data-icon="inline-start" />
+                Open editor
+              </Button>
+            </div>
+          </header>
+
+          <main className="shared-preview-main">
+            <PreviewCanvas
+              svg={svg}
+              status={status.state}
+              zoom={zoom[0]}
+              pan={pan}
+              setPan={setPan}
+              setZoom={setZoom}
+              message={status.message}
+              theme={previewTheme}
+            />
+          </main>
+        </div>
+        {shareFallbackDialog}
+        <Toaster richColors position="bottom-right" />
+      </TooltipProvider>
+    )
+  }
 
   return (
     <TooltipProvider>
@@ -883,6 +1251,27 @@ function App() {
               </TooltipTrigger>
               <TooltipContent>Render now · ⌘↵</TooltipContent>
             </Tooltip>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
+                <Share2 data-icon="inline-start" />
+                Share
+                <ChevronDown data-icon="inline-end" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-44">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Links</DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => void copyShareLink(true)}>
+                    <Share2 />
+                    Copy preview link
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void copyShareLink(false)}>
+                    <FileCode2 />
+                    Copy editor link
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             <DropdownMenu>
               <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
@@ -1402,6 +1791,7 @@ function App() {
           </span>
         </footer>
       </div>
+      {shareFallbackDialog}
       <Toaster richColors position="bottom-right" />
     </TooltipProvider>
   )

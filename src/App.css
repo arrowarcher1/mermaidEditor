@@ -27,6 +27,15 @@ input {
   letter-spacing: 0;
 }
 
+.shared-preview-shell {
+  display: grid;
+  grid-template-rows: 64px minmax(0, 1fr);
+  height: 100vh;
+  min-width: 0;
+  background: color-mix(in oklch, var(--background), var(--muted) 18%);
+  letter-spacing: 0;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -37,8 +46,20 @@ input {
   background: color-mix(in oklch, var(--background), transparent 4%);
 }
 
+.shared-preview-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--background), transparent 4%);
+}
+
 .brand-block,
 .topbar-actions,
+.shared-preview-actions,
 .panel-actions,
 .sidebar-actions,
 .search-box,
@@ -97,6 +118,23 @@ input {
   justify-content: flex-end;
   gap: 8px;
   min-width: 0;
+}
+
+.shared-preview-actions {
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.shared-preview-main {
+  min-height: 0;
+  padding: 14px;
+}
+
+.shared-preview-main .preview-canvas {
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 
 .toggle-group {
@@ -695,6 +733,16 @@ input {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
+.share-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-width: none;
+}
+
+.share-dialog input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
 .presentation-dialog .preview-canvas {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -725,18 +773,28 @@ input {
     overflow: auto;
   }
 
-  .app-shell {
+  .app-shell,
+  .shared-preview-shell {
     height: auto;
     min-height: 100vh;
+  }
+
+  .app-shell {
     grid-template-rows: auto auto 32px;
   }
 
-  .topbar {
+  .shared-preview-shell {
+    grid-template-rows: auto minmax(640px, 1fr);
+  }
+
+  .topbar,
+  .shared-preview-topbar {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .topbar-actions {
+  .topbar-actions,
+  .shared-preview-actions {
     width: 100%;
     flex-wrap: wrap;
     justify-content: flex-start;
@@ -771,6 +829,10 @@ input {
 }
 
 @media (max-width: 760px) {
+  .shared-preview-main {
+    padding: 10px;
+  }
+
   .workbench {
     height: auto;
     min-height: 980px;
