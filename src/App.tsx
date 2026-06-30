@@ -1,4 +1,5 @@
 import {
+  type ChangeEvent,
   type CSSProperties,
   type Dispatch,
   type PointerEvent,
@@ -22,16 +23,22 @@ import {
   Download,
   FileCode2,
   FileDown,
+  FileText,
+  Files,
   Focus,
   Frame,
   Maximize2,
   Moon,
+  MoreHorizontal,
   PanelLeft,
   Play,
+  Plus,
   RefreshCw,
   Search,
   Sparkles,
   Sun,
+  Trash2,
+  Upload,
   Workflow,
   ZoomIn,
 } from "lucide-react"
@@ -110,8 +117,17 @@ let mermaidLoader: Promise<typeof import("mermaid")["default"]> | null = null
 type RenderStatus = "rendering" | "valid" | "error"
 type InterfaceTheme = "light" | "dark"
 
-type PersistedState = {
+type LocalDiagram = {
+  id: string
+  title: string
   source: string
+  presetId: string
+  updatedAt: number
+}
+
+type PersistedState = {
+  documents: LocalDiagram[]
+  activeDocumentId: string
   interfaceTheme: InterfaceTheme
   diagramTheme: string
   autoRender: boolean
@@ -126,30 +142,107 @@ const themeItems = previewThemes.map((theme) => ({
 
 const initialPreset = diagramPresets[0]
 
+function createDiagramDocument(
+  title: string,
+  source: string,
+  presetId = "custom"
+): LocalDiagram {
+  return {
+    id:
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `diagram-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    title,
+    source,
+    presetId,
+    updatedAt: Date.now(),
+  }
+}
+
+function createInitialDocument() {
+  return createDiagramDocument(
+    initialPreset.title,
+    initialPreset.code,
+    initialPreset.id
+  )
+}
+
+function normalizeDocumentTitle(value: string) {
+  const trimmed = value.trim()
+  return trimmed || "Untitled diagram"
+}
+
+function isLocalDiagram(value: unknown): value is LocalDiagram {
+  if (!value || typeof value !== "object") {
+    return false
+  }
+
+  const candidate = value as Partial<LocalDiagram>
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.title === "string" &&
+    typeof candidate.source === "string"
+  )
+}
+
 function loadPersistedState(): PersistedState {
+  const fallbackDocument = createInitialDocument()
+  const fallback = {
+    documents: [fallbackDocument],
+    activeDocumentId: fallbackDocument.id,
+    interfaceTheme: "light" as InterfaceTheme,
+    diagramTheme: defaultLightTheme,
+    autoRender: true,
+  }
+
   if (typeof window === "undefined") {
-    return {
-      source: initialPreset.code,
-      interfaceTheme: "light",
-      diagramTheme: defaultLightTheme,
-      autoRender: true,
-    }
+    return fallback
   }
 
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY)
     if (!stored) {
-      return {
-        source: initialPreset.code,
-        interfaceTheme: "light",
-        diagramTheme: defaultLightTheme,
-        autoRender: true,
-      }
+      return fallback
     }
 
-    const parsed = JSON.parse(stored) as Partial<PersistedState>
+    const parsed = JSON.parse(stored) as Partial<PersistedState> & {
+      source?: string
+    }
+    const parsedDocuments = Array.isArray(parsed.documents)
+      ? parsed.documents.filter(isLocalDiagram).map((document) => ({
+          ...document,
+          presetId:
+            typeof document.presetId === "string"
+              ? document.presetId
+              : "custom",
+          updatedAt:
+            typeof document.updatedAt === "number"
+              ? document.updatedAt
+              : Date.now(),
+        }))
+      : []
+
+    const legacyDocument =
+      parsedDocuments.length === 0 && typeof parsed.source === "string"
+        ? [
+            createDiagramDocument(
+              initialPreset.title,
+              parsed.source || initialPreset.code,
+              parsed.source === initialPreset.code ? initialPreset.id : "custom"
+            ),
+          ]
+        : []
+    const documents =
+      parsedDocuments.length > 0 ? parsedDocuments : legacyDocument
+    const activeDocumentId = documents.some(
+      (document) => document.id === parsed.activeDocumentId
+    )
+      ? parsed.activeDocumentId
+      : documents[0]?.id
+
     return {
-      source: parsed.source || initialPreset.code,
+      documents: documents.length > 0 ? documents : fallback.documents,
+      activeDocumentId: activeDocumentId || fallback.activeDocumentId,
       interfaceTheme: parsed.interfaceTheme === "dark" ? "dark" : "light",
       diagramTheme: isPreviewTheme(parsed.diagramTheme)
         ? parsed.diagramTheme
@@ -157,12 +250,7 @@ function loadPersistedState(): PersistedState {
       autoRender: parsed.autoRender ?? true,
     }
   } catch {
-    return {
-      source: initialPreset.code,
-      interfaceTheme: "light",
-      diagramTheme: defaultLightTheme,
-      autoRender: true,
-    }
+    return fallback
   }
 }
 
@@ -209,8 +297,15 @@ function extractSvgDimensions(svg: string) {
 
 function App() {
   const persisted = useMemo(loadPersistedState, [])
-  const [source, setSource] = useState(persisted.source)
-  const [renderSource, setRenderSource] = useState(persisted.source)
+  const [documents, setDocuments] = useState(persisted.documents)
+  const [activeDocumentId, setActiveDocumentId] = useState(
+    persisted.activeDocumentId
+  )
+  const activeDocument =
+    documents.find((document) => document.id === activeDocumentId) ??
+    documents[0]
+  const source = activeDocument?.source ?? ""
+  const [renderSource, setRenderSource] = useState(source)
   const [interfaceTheme, setInterfaceTheme] = useState<InterfaceTheme>(
     persisted.interfaceTheme
   )
@@ -220,12 +315,12 @@ function App() {
   const [autoRender, setAutoRender] = useState(persisted.autoRender)
   const [query, setQuery] = useState("")
   const [selectedType, setSelectedType] = useState("All")
-  const [selectedPresetId, setSelectedPresetId] = useState(initialPreset.id)
-  const [activeTab, setActiveTab] = useState("templates")
+  const [activeTab, setActiveTab] = useState("files")
   const [zoom, setZoom] = useState([100])
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [examplesCollapsed, setExamplesCollapsed] = useState(false)
   const [sourceCollapsed, setSourceCollapsed] = useState(false)
+  const importInputRef = useRef<HTMLInputElement>(null)
   const [svg, setSvg] = useState("")
   const [status, setStatus] = useState<{
     state: RenderStatus
@@ -237,7 +332,7 @@ function App() {
   const isDarkInterface = interfaceTheme === "dark"
   const previewTheme = getPreviewTheme(diagramTheme)
   const selectedPreset = diagramPresets.find(
-    (preset) => preset.id === selectedPresetId
+    (preset) => preset.id === activeDocument?.presetId
   )
 
   const filteredPresets = useMemo(() => {
@@ -250,6 +345,22 @@ function App() {
       return matchesType && haystack.includes(normalizedQuery)
     })
   }, [query, selectedType])
+
+  const filteredDocuments = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase()
+    if (!normalizedQuery) {
+      return documents
+    }
+
+    return documents.filter((document) => {
+      const type =
+        diagramPresets.find((preset) => preset.id === document.presetId)
+          ?.type || "Custom"
+      return `${document.title} ${type} ${document.source}`
+        .toLowerCase()
+        .includes(normalizedQuery)
+    })
+  }, [documents, query])
 
   const stats = useMemo(() => {
     const lines = source.length === 0 ? 0 : source.split(/\r\n|\r|\n/).length
@@ -268,12 +379,18 @@ function App() {
     const timeout = window.setTimeout(() => {
       window.localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ source, interfaceTheme, diagramTheme, autoRender })
+        JSON.stringify({
+          documents,
+          activeDocumentId,
+          interfaceTheme,
+          diagramTheme,
+          autoRender,
+        })
       )
     }, SAVE_DELAY_MS)
 
     return () => window.clearTimeout(timeout)
-  }, [autoRender, diagramTheme, interfaceTheme, source])
+  }, [activeDocumentId, autoRender, diagramTheme, documents, interfaceTheme])
 
   useEffect(() => {
     if (!autoRender) {
@@ -370,8 +487,11 @@ function App() {
       return
     }
 
-    setSelectedPresetId(id)
-    setSource(preset.code)
+    updateActiveDocument({
+      source: preset.code,
+      title: preset.title,
+      presetId: preset.id,
+    })
     setRenderSource(preset.code)
     toast.success(`Loaded ${preset.title}`)
   }
@@ -406,10 +526,111 @@ function App() {
     resetView()
   }
 
+  function updateActiveDocument(updates: Partial<Omit<LocalDiagram, "id">>) {
+    setDocuments((currentDocuments) =>
+      currentDocuments.map((document) =>
+        document.id === activeDocumentId
+          ? { ...document, ...updates, updatedAt: Date.now() }
+          : document
+      )
+    )
+  }
+
+  function activateDocument(document: LocalDiagram) {
+    setActiveDocumentId(document.id)
+    setRenderSource(document.source)
+    resetView()
+  }
+
+  function switchDocument(id: string) {
+    const document = documents.find((item) => item.id === id)
+    if (document) {
+      activateDocument(document)
+    }
+  }
+
   function handleSourceChange(nextSource: string) {
-    setSource(nextSource)
-    if (nextSource !== selectedPreset?.code) {
-      setSelectedPresetId("custom")
+    const nextPresetId =
+      nextSource === selectedPreset?.code ? selectedPreset.id : "custom"
+    updateActiveDocument({ source: nextSource, presetId: nextPresetId })
+  }
+
+  function handleTitleChange(title: string) {
+    updateActiveDocument({ title })
+  }
+
+  function createNewDocument() {
+    const document = createDiagramDocument(
+      `Diagram ${documents.length + 1}`,
+      initialPreset.code,
+      initialPreset.id
+    )
+    setDocuments((currentDocuments) => [...currentDocuments, document])
+    activateDocument(document)
+    setExamplesCollapsed(false)
+    toast.success("New diagram created")
+  }
+
+  function duplicateDocument(id: string) {
+    const sourceDocument = documents.find((document) => document.id === id)
+    if (!sourceDocument) {
+      return
+    }
+
+    const document = createDiagramDocument(
+      `${normalizeDocumentTitle(sourceDocument.title)} copy`,
+      sourceDocument.source,
+      sourceDocument.presetId
+    )
+    setDocuments((currentDocuments) => [...currentDocuments, document])
+    activateDocument(document)
+    toast.success("Diagram duplicated")
+  }
+
+  function deleteDocument(id: string) {
+    if (documents.length === 1) {
+      toast.error("Keep at least one diagram")
+      return
+    }
+
+    const nextDocuments = documents.filter((document) => document.id !== id)
+    setDocuments(nextDocuments)
+    if (id === activeDocumentId) {
+      activateDocument(nextDocuments[0])
+    }
+    toast.success("Diagram deleted")
+  }
+
+  async function importFiles(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
+    event.target.value = ""
+
+    if (files.length === 0) {
+      return
+    }
+
+    try {
+      const importedDocuments = await Promise.all(
+        files.map(async (file) =>
+          createDiagramDocument(
+            file.name.replace(/\.[^.]+$/, "") || "Imported diagram",
+            await file.text()
+          )
+        )
+      )
+      setDocuments((currentDocuments) => [
+        ...currentDocuments,
+        ...importedDocuments,
+      ])
+      activateDocument(importedDocuments[0])
+      setExamplesCollapsed(false)
+      toast.success(
+        importedDocuments.length === 1
+          ? "Diagram imported"
+          : `${importedDocuments.length} diagrams imported`
+      )
+    } catch {
+      toast.error("Could not import one or more files")
     }
   }
 
@@ -450,7 +671,7 @@ function App() {
           toast.error("PNG export failed")
           return
         }
-        downloadBlob(pngBlob, `${slugify(selectedPreset?.title || "diagram")}.png`)
+        downloadBlob(pngBlob, `${slugify(activeDocument?.title || "diagram")}.png`)
         toast.success("PNG downloaded")
       }, "image/png")
     }
@@ -470,7 +691,7 @@ function App() {
     }
     downloadBlob(
       new Blob([svg], { type: "image/svg+xml;charset=utf-8" }),
-      `${slugify(selectedPreset?.title || "diagram")}.svg`
+      `${slugify(activeDocument?.title || "diagram")}.svg`
     )
     toast.success("SVG downloaded")
   }
@@ -478,7 +699,7 @@ function App() {
   function exportSource() {
     downloadBlob(
       new Blob([source], { type: "text/plain;charset=utf-8" }),
-      `${slugify(selectedPreset?.title || "diagram")}.mmd`
+      `${slugify(activeDocument?.title || "diagram")}.mmd`
     )
     toast.success("Mermaid source downloaded")
   }
@@ -709,10 +930,49 @@ function App() {
           <aside className="sidebar">
             <div className="sidebar-header">
               <div>
-                <h2>Examples</h2>
-                <p>Start from a proven Mermaid pattern.</p>
+                <h2>Workspace</h2>
+                <p>{documents.length} local diagram{documents.length === 1 ? "" : "s"}</p>
               </div>
-              <Badge variant="outline">{diagramPresets.length}</Badge>
+              <div className="sidebar-actions">
+                <input
+                  ref={importInputRef}
+                  className="sr-only"
+                  type="file"
+                  accept=".mmd,.mermaid,.txt,text/plain"
+                  multiple
+                  onChange={(event) => void importFiles(event)}
+                />
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="Import source files"
+                        onClick={() => importInputRef.current?.click()}
+                      />
+                    }
+                  >
+                    <Upload />
+                  </TooltipTrigger>
+                  <TooltipContent>Import files</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="Create diagram"
+                        onClick={createNewDocument}
+                      />
+                    }
+                  >
+                    <Plus />
+                  </TooltipTrigger>
+                  <TooltipContent>New diagram</TooltipContent>
+                </Tooltip>
+              </div>
             </div>
 
             <div className="search-box">
@@ -726,9 +986,85 @@ function App() {
 
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <TabsList className="w-full">
+                <TabsTrigger value="files">Files</TabsTrigger>
                 <TabsTrigger value="templates">Templates</TabsTrigger>
                 <TabsTrigger value="details">Details</TabsTrigger>
               </TabsList>
+              <TabsContent value="files" className="files-tab">
+                <ScrollArea className="file-list">
+                  <div className="file-stack">
+                    {filteredDocuments.map((document) => (
+                      <div
+                        key={document.id}
+                        className="file-item"
+                        data-active={document.id === activeDocumentId}
+                      >
+                        <button
+                          type="button"
+                          className="file-select"
+                          onClick={() => switchDocument(document.id)}
+                        >
+                          <FileText aria-hidden="true" />
+                          <span>
+                            <strong>
+                              {normalizeDocumentTitle(document.title)}
+                            </strong>
+                            <small>
+                              {
+                                (diagramPresets.find(
+                                  (preset) => preset.id === document.presetId
+                                )?.type || "Custom")
+                              }{" "}
+                              ·{" "}
+                              {document.source.length === 0
+                                ? 0
+                                : document.source.split(/\r\n|\r|\n/).length}{" "}
+                              lines
+                            </small>
+                          </span>
+                        </button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button
+                                variant="ghost"
+                                size="icon-xs"
+                                aria-label={`Open actions for ${normalizeDocumentTitle(document.title)}`}
+                              />
+                            }
+                          >
+                            <MoreHorizontal />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-36">
+                            <DropdownMenuGroup>
+                              <DropdownMenuItem
+                                onClick={() => duplicateDocument(document.id)}
+                              >
+                                <Files />
+                                Duplicate
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                variant="destructive"
+                                disabled={documents.length === 1}
+                                onClick={() => deleteDocument(document.id)}
+                              >
+                                <Trash2 />
+                                Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuGroup>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    ))}
+                    {filteredDocuments.length === 0 ? (
+                      <div className="file-empty">
+                        <Files aria-hidden="true" />
+                        <span>No local diagrams match this search.</span>
+                      </div>
+                    ) : null}
+                  </div>
+                </ScrollArea>
+              </TabsContent>
               <TabsContent value="templates" className="templates-tab">
                 <Select
                   items={[{ label: "All", value: "All" }, ...diagramTypes.map((type) => ({ label: type, value: type }))]}
@@ -757,7 +1093,7 @@ function App() {
                         key={preset.id}
                         type="button"
                         className="template-item"
-                        data-active={preset.id === selectedPresetId}
+                        data-active={preset.id === activeDocument?.presetId}
                         onClick={() => applyPreset(preset.id)}
                       >
                         <span className="template-type">{preset.type}</span>
@@ -771,8 +1107,8 @@ function App() {
 
               <TabsContent value="details" className="details-tab">
                 <div className="detail-row">
-                  <span>Selected</span>
-                  <strong>{selectedPreset?.title || "Custom diagram"}</strong>
+                  <span>Active file</span>
+                  <strong>{normalizeDocumentTitle(activeDocument?.title || "")}</strong>
                 </div>
                 <div className="detail-row">
                   <span>Diagram type</span>
@@ -785,8 +1121,8 @@ function App() {
                 <div className="tip-block">
                   <Sparkles aria-hidden="true" />
                   <p>
-                    Use templates to switch syntax quickly. Your current source
-                    and theme settings are saved locally.
+                    Files, source, and theme settings are saved in this browser.
+                    Use import to bring in several local Mermaid sources at once.
                   </p>
                 </div>
               </TabsContent>
@@ -805,8 +1141,20 @@ function App() {
               <ResizablePanel defaultSize={45} minSize={28} className="pane">
                 <section className="editor-panel">
                   <div className="panel-header">
-                    <div>
-                      <h2>Source</h2>
+                    <div className="source-title-block">
+                      <label htmlFor="diagram-title">Source</label>
+                      <Input
+                        id="diagram-title"
+                        className="source-title-input"
+                        value={activeDocument?.title || ""}
+                        onChange={(event) => handleTitleChange(event.target.value)}
+                        onBlur={(event) =>
+                          handleTitleChange(
+                            normalizeDocumentTitle(event.target.value)
+                          )
+                        }
+                        aria-label="Diagram title"
+                      />
                       <p>{stats.lines} lines, {stats.characters} chars</p>
                     </div>
                     <div className="panel-actions">
