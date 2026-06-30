@@ -1,32 +1,89 @@
-# React + TypeScript + Vite
+# Mermaid Studio
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Mermaid Studio is a browser-based Mermaid diagram editor built with React,
+TypeScript, and Vite. It gives you a focused workspace for drafting Mermaid
+source, validating the diagram, previewing it with different visual themes, and
+exporting the result for docs or presentations.
 
-Currently, two official plugins are available:
+## What It Does
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Edit Mermaid source in a CodeMirror-powered editor.
+- Preview diagrams with Mermaid's renderer and syntax validation.
+- Start from built-in examples for flowcharts, sequence diagrams, class
+  diagrams, state machines, ERDs, Gantt charts, user journeys, and Git graphs.
+- Search and filter templates by diagram type.
+- Switch between light and dark app interfaces.
+- Apply light and dark preview themes independently of the app theme.
+- Auto-render while editing, or render manually with the toolbar button or
+  `Cmd+Enter` / `Ctrl+Enter`.
+- Pan, zoom, reset, and focus the preview workspace.
+- Copy Mermaid source or rendered SVG.
+- Export diagrams as SVG, PNG, or `.mmd` source files.
+- Save the current source, app theme, preview theme, and render mode locally
+  between sessions using `localStorage`.
 
-## React Compiler
+## Tech Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- React 19
+- TypeScript
+- Vite
+- Mermaid
+- CodeMirror
+- Tailwind CSS
+- shadcn-style UI primitives
+- lucide-react icons
 
-## Expanding the Oxlint configuration
+## Getting Started
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+Install dependencies:
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Start the development server:
+
+```bash
+npm run dev
+```
+
+Create a production build:
+
+```bash
+npm run build
+```
+
+Preview the production build locally:
+
+```bash
+npm run preview
+```
+
+Run linting:
+
+```bash
+npm run lint
+```
+
+## Local Persistence
+
+The app stores editor state in the browser under the `localStorage` key
+`mermaid-studio:v1`. This keeps the current Mermaid source, interface theme,
+diagram theme, and auto-render setting available after a refresh or browser
+restart. No server-side storage is used.
+
+## Project Structure
+
+```text
+src/
+  App.tsx                  Main editor, preview, export, and persistence logic
+  App.css                  App-specific layout and visual styles
+  index.css                Global styles and Tailwind setup
+  lib/
+    diagram-presets.ts     Built-in Mermaid examples
+    preview-themes.ts      Mermaid preview theme definitions
+  components/ui/           Reusable UI primitives
+public/
+  favicon.svg
+  icons.svg
+```
